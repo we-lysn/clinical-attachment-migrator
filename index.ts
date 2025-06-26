@@ -12,26 +12,38 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const MIGRATION_SUPABASE_URL = process.env.MIGRATION_SUPABASE_URL;
-const MIGRATION_SUPABASE_SERVICE_ROLE_KEY = process.env.MIGRATION_SUPABASE_SERVICE_ROLE_KEY;
+const MIGRATION_SUPABASE_SERVICE_ROLE_KEY =
+  process.env.MIGRATION_SUPABASE_SERVICE_ROLE_KEY;
 const PROD_SUPABASE_URL = process.env.PROD_SUPABASE_URL;
-const PROD_SUPABASE_SERVICE_ROLE_KEY = process.env.PROD_SUPABASE_SERVICE_ROLE_KEY;
+const PROD_SUPABASE_SERVICE_ROLE_KEY =
+  process.env.PROD_SUPABASE_SERVICE_ROLE_KEY;
 const BUCKET_NAME = process.env.BUCKET_NAME || "app_private";
 
 // Validate required environment variables
-if (!MIGRATION_SUPABASE_URL || !MIGRATION_SUPABASE_SERVICE_ROLE_KEY || !PROD_SUPABASE_URL || !PROD_SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("Missing required environment variables. Please check your .env file.");
+if (
+  !MIGRATION_SUPABASE_URL ||
+  !MIGRATION_SUPABASE_SERVICE_ROLE_KEY ||
+  !PROD_SUPABASE_URL ||
+  !PROD_SUPABASE_SERVICE_ROLE_KEY
+) {
+  console.error(
+    "Missing required environment variables. Please check your .env file."
+  );
   process.exit(1);
 }
-
-const migrationSupabase = createClient(MIGRATION_SUPABASE_URL, MIGRATION_SUPABASE_SERVICE_ROLE_KEY);
-const productionSupabase = createClient(PROD_SUPABASE_URL, PROD_SUPABASE_SERVICE_ROLE_KEY);
+const productionSupabase = createClient(
+  PROD_SUPABASE_URL,
+  PROD_SUPABASE_SERVICE_ROLE_KEY
+);
 
 async function transferClinicalAttachments() {
   try {
     console.log("Starting migration of clinical attachments...");
 
     // Step 1: Fetch all clinical attachments from the migration database
-    const { data: attachments, error: fetchError } = await productionSupabase.from("clinical_attachments").select("*");
+    const { data: attachments, error: fetchError } = await productionSupabase
+      .from("clinical_attachments")
+      .select("*");
 
     if (fetchError) {
       throw new Error(`Error fetching attachments: ${fetchError.message}`);
@@ -41,8 +53,14 @@ async function transferClinicalAttachments() {
 
     for (const attachment of attachments) {
       // Step 1.1: Ensure the path starts with '/'
-      const fileKeyWithSlash = attachment.fileKey.startsWith("/") ? attachment.fileKey : `/${attachment.fileKey}`;
-      const fileKeyWithoutSlash = attachment.fileKey.startsWith("/") ? attachment.fileKey.slice(1) : attachment.fileKey;
+      const fileKeyWithSlash = attachment.fileKey.startsWith("/")
+        ? attachment.fileKey
+        : `/${attachment.fileKey}`;
+      const fileKeyWithoutSlash = attachment.fileKey.startsWith("/")
+        ? attachment.fileKey.slice(1)
+        : attachment.fileKey;
+      const fileName = fileKeyWithSlash.split("/").pop();
+
       // Step 2: check if file exists in the production storage
 
       const { data: prodData, error: prodError } = await productionSupabase
@@ -53,45 +71,66 @@ async function transferClinicalAttachments() {
         .eq("name", fileKeyWithoutSlash);
 
       if (prodError) {
-        console.error(`Error checking file in production storage: ${prodError.message}`);
+        console.error(
+          `Error checking file in production storage: ${prodError.message}`
+        );
         continue; // Skip to next attachment
       }
 
       if (prodData && prodData.length > 0) {
-        console.log(`File already exists in production storage: ${fileKeyWithSlash}`);
+        console.log(
+          `File already exists in production storage: ${fileKeyWithSlash}`
+        );
         continue; // Skip if file already exists
       }
 
       // Step 3: Check if the file exists in the migration storage
-      const { data: migrationFile, error: migrationCheckError } = await migrationSupabase.storage.from(BUCKET_NAME).download(fileKeyWithSlash);
+      const { data: migrationFile, error: migrationCheckError } =
+        await productionSupabase.storage
+          .from(BUCKET_NAME)
+          .copy(`files/${fileName}`, fileKeyWithoutSlash);
 
       if (migrationCheckError) {
-        console.error(`File not found in migration storage: ${fileKeyWithSlash}`);
+        console.log(migrationCheckError);
+        console.error(
+          `File not found in migration storage: files/${fileName}, trying to search from consent_form folder`
+        );
+
+        const { data: migrationFile2, error: migrationCheckError2 } =
+          await productionSupabase.storage
+            .from(BUCKET_NAME)
+            .copy(`consent_forms/${fileName}`, fileKeyWithoutSlash);
+
+        if (migrationCheckError2) {
+          console.log(
+            `File not found in migration storage: consent_forms/${fileName}, skipping`
+          );
+        }
+
         continue; // Skip if file does not exist in migration storage
       }
 
-      // Step 4: Copy the file to production storage
-      const { error: copyError } = await productionSupabase.storage.from(BUCKET_NAME).upload(fileKeyWithSlash, migrationFile);
-
-      if (copyError) {
-        console.error(`Error copying file to production storage: ${copyError.message}`);
-      } else {
-        console.log(`Successfully copied file to production storage: ${fileKeyWithSlash}`);
-      }
+      console.log(
+        `Successfully copied file to production storage: ${fileKeyWithSlash}`
+      );
     }
 
     console.log("Migration cycle completed successfully.");
   } catch (error) {
-    console.error(`Migration failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(
+      `Migration failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
 }
 
 async function runMigrationService() {
   console.log("Clinical Attachment Migrator Service started");
-  
+
   // Run the migration once
   await transferClinicalAttachments();
-  
+
   console.log("Migration completed. Service finished.");
 }
 
