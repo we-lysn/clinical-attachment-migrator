@@ -19,6 +19,8 @@ const PROD_SUPABASE_SERVICE_ROLE_KEY =
   process.env.PROD_SUPABASE_SERVICE_ROLE_KEY;
 const BUCKET_NAME = process.env.BUCKET_NAME || "app_private";
 
+const BATCH_SIZE = 10; // Number of attachments to process in each batch
+
 // Validate required environment variables
 if (
   !MIGRATION_SUPABASE_URL ||
@@ -77,7 +79,6 @@ async function migrate(attachment: { fileKey: string }) {
       .copy(`files/${fileName}`, fileKeyWithoutSlash);
 
   if (migrationCheckError) {
-    console.log(migrationCheckError);
     console.error(
       `File not found in migration storage: files/${fileName}, trying to search from consent_form folder`
     );
@@ -92,6 +93,10 @@ async function migrate(attachment: { fileKey: string }) {
         `File not found in migration storage: consent_forms/${fileName}, skipping`
       );
     }
+
+    console.log(
+      `Successfully copied file to production storage: ${fileKeyWithSlash}`
+    );
 
     return null;
   }
@@ -116,11 +121,11 @@ async function transferClinicalAttachments() {
 
     console.log(`Found ${attachments.length} attachments to process.`);
 
-    for (let i = 0; i < attachments.length; i += 100) {
-      const batch = attachments.slice(i, i + 100);
+    for (let i = 0; i < attachments.length; i += BATCH_SIZE) {
+      const batch = attachments.slice(i, i + BATCH_SIZE);
       console.log(
-        `Processing batch ${i / 100 + 1} of ${Math.ceil(
-          attachments.length / 100
+        `Processing batch ${i / BATCH_SIZE + 1} of ${Math.ceil(
+          attachments.length / BATCH_SIZE
         )}`
       );
       const migrationPromises = batch.map((attachment) => migrate(attachment));
