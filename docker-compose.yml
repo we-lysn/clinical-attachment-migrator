@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  clinical-attachment-migrator:
+    build: .
+    container_name: clinical-attachment-migrator
+    restart: "no" # Don't restart since this runs once and exits
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    volumes:
+      # Mount logs directory to persist logs
+      - ./logs:/app/logs
+      # Optionally mount .env file (alternative to env_file)
+      # - ./.env:/app/.env:ro
+    # Add resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
