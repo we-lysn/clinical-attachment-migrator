@@ -36,6 +36,71 @@ const productionSupabase = createClient(
   PROD_SUPABASE_SERVICE_ROLE_KEY
 );
 
+async function migrate(attachment: { fileKey: string }) {
+  // Step 1.1: Ensure the path starts with '/'
+  const fileKeyWithSlash = attachment.fileKey.startsWith("/")
+    ? attachment.fileKey
+    : `/${attachment.fileKey}`;
+  const fileKeyWithoutSlash = attachment.fileKey.startsWith("/")
+    ? attachment.fileKey.slice(1)
+    : attachment.fileKey;
+  const fileName = fileKeyWithSlash.split("/").pop();
+
+  // Step 2: check if file exists in the production storage
+
+  const { data: prodData, error: prodError } = await productionSupabase
+    .schema("storage")
+    .from("objects")
+    .select("*")
+    .eq("bucket_id", BUCKET_NAME)
+    .eq("name", fileKeyWithoutSlash);
+
+  if (prodError) {
+    console.error(
+      `Error checking file in production storage: ${prodError.message}`
+    );
+
+    return prodError; // Return error to handle it in the caller
+  }
+
+  if (prodData && prodData.length > 0) {
+    console.log(
+      `File already exists in production storage: ${fileKeyWithSlash}`
+    );
+    return null; // File already exists, no need to migrate
+  }
+
+  // Step 3: Check if the file exists in the migration storage
+  const { data: migrationFile, error: migrationCheckError } =
+    await productionSupabase.storage
+      .from(BUCKET_NAME)
+      .copy(`files/${fileName}`, fileKeyWithoutSlash);
+
+  if (migrationCheckError) {
+    console.log(migrationCheckError);
+    console.error(
+      `File not found in migration storage: files/${fileName}, trying to search from consent_form folder`
+    );
+
+    const { data: migrationFile2, error: migrationCheckError2 } =
+      await productionSupabase.storage
+        .from(BUCKET_NAME)
+        .copy(`consent_forms/${fileName}`, fileKeyWithoutSlash);
+
+    if (migrationCheckError2) {
+      console.log(
+        `File not found in migration storage: consent_forms/${fileName}, skipping`
+      );
+    }
+
+    return null;
+  }
+
+  console.log(
+    `Successfully copied file to production storage: ${fileKeyWithSlash}`
+  );
+}
+
 async function transferClinicalAttachments() {
   try {
     console.log("Starting migration of clinical attachments...");
@@ -51,68 +116,15 @@ async function transferClinicalAttachments() {
 
     console.log(`Found ${attachments.length} attachments to process.`);
 
-    for (const attachment of attachments) {
-      // Step 1.1: Ensure the path starts with '/'
-      const fileKeyWithSlash = attachment.fileKey.startsWith("/")
-        ? attachment.fileKey
-        : `/${attachment.fileKey}`;
-      const fileKeyWithoutSlash = attachment.fileKey.startsWith("/")
-        ? attachment.fileKey.slice(1)
-        : attachment.fileKey;
-      const fileName = fileKeyWithSlash.split("/").pop();
-
-      // Step 2: check if file exists in the production storage
-
-      const { data: prodData, error: prodError } = await productionSupabase
-        .schema("storage")
-        .from("objects")
-        .select("*")
-        .eq("bucket_id", BUCKET_NAME)
-        .eq("name", fileKeyWithoutSlash);
-
-      if (prodError) {
-        console.error(
-          `Error checking file in production storage: ${prodError.message}`
-        );
-        continue; // Skip to next attachment
-      }
-
-      if (prodData && prodData.length > 0) {
-        console.log(
-          `File already exists in production storage: ${fileKeyWithSlash}`
-        );
-        continue; // Skip if file already exists
-      }
-
-      // Step 3: Check if the file exists in the migration storage
-      const { data: migrationFile, error: migrationCheckError } =
-        await productionSupabase.storage
-          .from(BUCKET_NAME)
-          .copy(`files/${fileName}`, fileKeyWithoutSlash);
-
-      if (migrationCheckError) {
-        console.log(migrationCheckError);
-        console.error(
-          `File not found in migration storage: files/${fileName}, trying to search from consent_form folder`
-        );
-
-        const { data: migrationFile2, error: migrationCheckError2 } =
-          await productionSupabase.storage
-            .from(BUCKET_NAME)
-            .copy(`consent_forms/${fileName}`, fileKeyWithoutSlash);
-
-        if (migrationCheckError2) {
-          console.log(
-            `File not found in migration storage: consent_forms/${fileName}, skipping`
-          );
-        }
-
-        continue; // Skip if file does not exist in migration storage
-      }
-
+    for (let i = 0; i < attachments.length; i += 100) {
+      const batch = attachments.slice(i, i + 100);
       console.log(
-        `Successfully copied file to production storage: ${fileKeyWithSlash}`
+        `Processing batch ${i / 100 + 1} of ${Math.ceil(
+          attachments.length / 100
+        )}`
       );
+      const migrationPromises = batch.map((attachment) => migrate(attachment));
+      await Promise.all(migrationPromises);
     }
 
     console.log("Migration cycle completed successfully.");
